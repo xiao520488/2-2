@@ -1,0 +1,91 @@
+# ============================================================
+# 竞赛情报与获奖作品知识库系统 — .gitignore
+# ============================================================
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# ---------- 虚拟环境 ----------
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# ---------- 密钥 / 环境变量 ----------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ---------- 数据库（真值源，不入库）----------
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.bak
+*.bak_*
+*.db.bak*
+backups/
+
+# ---------- 向量库（可由 SQLite 全量重建，不入库）----------
+chroma_db/
+.chroma/
+
+# ---------- 模型缓存 ----------
+.cache/
+huggingface/
+models/
+*.safetensors
+*.bin
+*.pt
+*.pth
+
+# ---------- 日志 / 临时文件 ----------
+*.log
+*.tmp
+*.temp
+_*.txt
+_*.json
+_*.log
+_temp_*
+tmp/
+
+# ---------- 测试与覆盖率 ----------
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# ---------- Streamlit ----------
+# 保留 .streamlit/config.toml（主题配置需要入库）
+.streamlit/secrets.toml
+
+# ---------- 编辑器 / 操作系统 ----------
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- 构建产物 ----------
+*.zip
+*.tar.gz
