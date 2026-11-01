@@ -132,7 +132,7 @@ flowchart TB
 
 ---
 
-## 4. 从零部署
+## 4. 从零部署（有requirements.txt）
 
 ### 4.1 环境要求
 
