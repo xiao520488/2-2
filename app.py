@@ -15,6 +15,7 @@ import streamlit as st
 import db
 import retriever
 import llm
+import bootstrap
 
 # ---------------------------------------------------------------- 常量
 MONTHS = list(range(1, 13))
@@ -1015,7 +1016,10 @@ def main():
         layout="wide",
         initial_sidebar_state="expanded",  # 仅控制首屏默认展开，用户可自由收起
     )
-    db.init_db()
+    # 冷启动自动初始化：建表 → 空库灌种子 → 同步 Chroma（进程级只跑一次）
+    bootstrap.ensure_ready(verbose=True)
+    bootstrap.show_banner()
+    db.init_db()  # 幂等兜底（ensure_ready 内已建表，此处保证本地/热重载场景安全）
     inject_styles()
 
     st.sidebar.title("🏆 竞赛信息检索")
