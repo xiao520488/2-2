@@ -1,20 +1,87 @@
 # 🏆 竞赛情报与获奖作品知识库系统
 
-> 一个「结构化检索 + 语义检索（RAG）+ LLM 生成」的竞赛情报工作台：
-> 查比赛、看时间轴、问问题、攒灵感，四页搞定。
+## 🚀 线上体验（Live Demo）
+
+> **👉 [https://xiao-666.streamlit.app](https://xiao-666.streamlit.app)**
+>
+> 打开即用，**无需配置任何 API Key** —— 空库自动建表造数，无 Key 自动降级本地检索摘要，页面永不白屏。
+
+**一句话简介**：把「散落各官网的竞赛信息 + 历史获奖作品」做成一个 **结构化检索 + 语义检索（RAG）+ LLM 生成** 的一体化竞赛情报工作台 —— 查比赛、看时间轴、问问题、攒灵感，四页搞定。
+
+<p align="center">
+
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
+![Streamlit](https://img.shields.io/badge/Streamlit-1.36%2B-FF4B4B)
+![SQLite](https://img.shields.io/badge/SQLite-WAL-003B57)
+![Chroma](https://img.shields.io/badge/ChromaDB-vector--store-orange)
+![Status](https://img.shields.io/badge/status-online-success)
+![Review](https://img.shields.io/badge/code%20review-passing-brightgreen)
+
+</p>
 
 ---
-### 首先这个报告是我的agent自己生成的，他根据我创造他的全流程自我总结。原本我只是依据任务一的软件工程流程做了一个很普通的竞赛信息管理，只不过后面想着做一下迭代吧，然后就成了现在这样，这还只是一个半成品，还没做完，还可以做一些迭代。
+
+## ✨ 核心亮点
+
+除了业务功能本身，这个项目在**工程健壮性**上做了不少“上线之后才知道重要”的设计。以下四条是让它能作为**公开 Demo 稳定存活**的关键：
+
+### 1️⃣ 云端空库冷启动自动建表造数（Zero-Touch Bootstrap）
+
+Streamlit Community Cloud 每次部署都是**全新容器**，仓库里不带也不该带 `.db` 文件。首次访问时，`bootstrap.py` 自动把“空库”变成“可演示环境”：
+
+```
+空库 → 建表（competitions + 知识库表） → 灌入 seed_data 演示数据
+     → approved 作品同步进 Chroma 向量库 → 应用就绪
+```
+
+- **任一步失败都不阻断启动**，只记录警告并在页面顶部一次性提示（`bootstrap.show_banner()`）。
+- 初始化结果通过 `st.toast` 反馈（竞赛 / 作品 / 洞察 / 灵感各多少条、耗时多少秒）。
+- 对外只暴露 `ensure_ready()`，`app.py` 在 `main()` 开头调用一次，职责清晰。
+
+### 2️⃣ 模块级防抖锁（Module-Level Debounce Lock）
+
+Streamlit 的脚本会**反复重跑**，冷启动初始化如果被并发触发，会出现重复建表、重复造数、重复建索引。因此做了**三层守卫**：
+
+```python
+_BOOT_LOCK = threading.Lock()   # ① 进程级互斥，防多线程并发进初始化
+_BOOTED = False                 # ② 进程级一次性标记，防 st.cache_resource 失效时重入
+_SS_KEY = "_bootstrap_done"     # ③ session_state 标记，防单会话重复执行
+```
+
+> 效果：**一次部署只初始化一次**，无论用户怎么刷新、开几个标签页、多少人同时首次访问。
+
+### 3️⃣ 无 Key 兜底降级（Graceful Degradation）
+
+Demo 站点最大的风险是「**别人打开时没有 Key**」。全链路做了降级设计，任何一环挂掉都不白屏：
+
+| 环节 | 正常路径 | 降级路径 |
+| --- | --- | --- |
+| LLM 调用 | DeepSeek 流式作答 | `llm.llm_available()` 为假 / 调用异常 → `render_local_fallback()` 输出**本地检索摘要**，并说明原因 |
+| 向量模型 | BGE-small-zh-v1.5 真编码 | 下载失败 / 超时 / `KB_EMBED_MOCK=1` → **确定性 mock 向量**（`embedder.py` 自动探测切换） |
+| 向量索引 | Chroma 已同步 | 索引为空 → 提示“去检索页点同步索引”，结构化筛选（纯 SQLite）依然可用 |
+| 冷启动 | 全流程成功 | 任一步异常 → 记录 warning，**应用继续启动** |
+
+一句话：**SQLite 是唯一真值源，Chroma 只是可重建的索引，LLM 与 BGE 都是可降级的增强项。**
+
+### 4️⃣ 分页缓存提速（Paginated + Cached）
+
+- **分页渲染**：卡片以 `3 列 × 2 行 = 6 张/页`（`CARDS_PER_PAGE`）分页，避免一次性渲染几百张卡片导致的卡顿。
+- **查询缓存**：热点读取函数挂 `@st.cache_data(show_spinner=False, max_entries=128/64)`，参数均为可哈希的 `None / str / int`，命中缓存时页面切换近乎瞬时。
+- **向量检索两阶段**：`L1 多路召回（KB_RECALL_MULT，默认 3 倍） → L2 重排打分（KB_MIN_SCORE 阈值过滤）`，在保证召回率的同时压低 token 与延迟。
 
 ---
 
-## 系统架构
+## 🧭 系统架构
 
-下图展示三层架构与一次「提问」请求的完整流转路径。实线为同步调用，虚线为降级/重建路径。
+下图是**最全的一张架构图**：包含 Streamlit UI 五大视图、服务层编排、SQLite 真值源、Chroma 向量库、DeepSeek LLM，以及**完整的兜底链路**（虚线）。
 
 ```mermaid
 flowchart TB
-    subgraph UI["前端层 · Streamlit"]
+    subgraph CLIENT["🖥 用户浏览器"]
+        B1["任意浏览器<br/>（含翻译插件场景）"]
+    end
+
+    subgraph UI["🎨 前端层 · Streamlit UI"]
         direction LR
         U1["竞赛列表<br/>类别/月份/关键字"]
         U2["报名时间轴<br/>1-12 月视图"]
@@ -23,46 +90,72 @@ flowchart TB
         U5["独立检索页<br/>结构化过滤"]
     end
 
-    subgraph SVC["服务层 · 检索与编排"]
+    subgraph BOOT["🛫 启动守卫 · bootstrap.py"]
         direction TB
-        R1["retriever.py<br/>top_k / 召回倍数 / 分数阈值"]
-        R2["kb.py<br/>全量同步 · 索引重建"]
+        BS1["ensure_ready()"]
+        BS2["模块级防抖锁<br/>_BOOT_LOCK + _BOOTED<br/>+ session_state 标记"]
+        BS3["空库检测 → 建表 → 造数<br/>→ 同步 Chroma 索引"]
+        BS1 --> BS2 --> BS3
     end
 
-    subgraph MODEL["模型层"]
+    subgraph SVC["⚙️ 服务层 · 检索与编排"]
+        direction TB
+        R1["retriever.py<br/>L1 召回(KB_RECALL_MULT)<br/>→ L2 重排(KB_MIN_SCORE)"]
+        R2["kb.py<br/>知识库生命周期<br/>全量同步 · 索引重建"]
+        R3["analyzer.py<br/>分类分布 · 年度趋势 · 选题建议"]
+        C1["分页渲染<br/>CARDS_PER_PAGE = 3×2"]
+        C2["st.cache_data<br/>max_entries=128/64"]
+    end
+
+    subgraph MODEL["🤖 模型层（可降级增强项）"]
         direction LR
         M1["DeepSeek<br/>OpenAI 兼容协议<br/>chat / chat_json / chat_stream"]
         M2["BGE-small-zh-v1.5<br/>512 维 · CPU 可跑"]
     end
 
-    subgraph DATA["数据层"]
+    subgraph FALLBACK["🛟 兜底链路"]
         direction LR
-        D1[("SQLite · WAL<br/>competitions / awards<br/>ideas / insights<br/>search_leads / crawl_jobs")]
-        D2[("ChromaDB<br/>向量索引<br/>chroma_db/")]
+        F1["render_local_fallback()<br/>本地检索摘要回答"]
+        F2["Mock 确定性向量<br/>embedder 自动探测"]
+        F3["结构化筛选兜底<br/>纯 SQLite 可用"]
     end
 
-    U1 --> D1
-    U2 --> D1
-    U4 -->|状态流转写回| D1
-    U5 --> R1
-    U5 --> D1
-    U3 --> R1
-    R1 -->|"query 向量化"| M2
-    R1 -->|"相似度检索"| D2
-    R1 -.->|"无命中/异常"| D1
-    R1 -->|"召回文档作为上下文"| M1
-    M1 -->|"token 流"| U3
-    U3 -.->|"无 Key / 调用失败<br/>降级为本地检索摘要"| D1
-    D1 -->|"获奖作品全量读取"| R2
-    R2 -->|"写入/重建"| D2
-    R2 -->|"document 嵌入"| M2
+    subgraph DATA["🗄 数据层"]
+        direction LR
+        D1[("SQLite · WAL<br/>competitions / awards<br/>ideas / insights<br/>search_leads / crawl_jobs")]
+        D2[("ChromaDB<br/>awards 向量集合<br/>可随时全量重建")]
+    end
+
+    B1 --> UI
+    UI --> BOOT
+    UI --> SVC
+    BOOT --> DATA
+    R1 --> D2
+    R2 --> D1
+    R2 --> D2
+    R3 --> D1
+    U3 --> M1
+    M1 --> R1
+    R1 --> M2
+    U1 --> C1
+    U3 --> C2
+
+    M1 -. "无 Key / 调用异常" .-> F1
+    M2 -. "模型加载失败" .-> F2
+    D2 -. "索引为空" .-> F3
+    F1 --> U3
+    F2 --> R1
+    F3 --> U5
+
+    D1 -. "真值源 → 全量重建索引" .-> D2
+    BS3 -. "失败仅告警，不阻断启动" .-> F3
 ```
 
-**关键设计**：SQLite 是唯一真值源，Chroma 只是可丢弃、可重建的派生索引（图中虚线回边）；DeepSeek 与 BGE 都做了失败降级，任何一环不可用都不会让页面白屏。
+**设计分工**：SQLite 负责筛选 / 聚合 / 统计的「真值」，Chroma 只做语义相似度索引，且**索引可随时由 SQLite 全量重建**。
 
 ---
 
-## 1. 项目简介
+## 📖 项目简介
 
 面向「选赛 / 备赛 / 找选题」场景的一体化工具。核心解决三个问题：
 
@@ -74,7 +167,7 @@ flowchart TB
 
 **四个页面**
 
-- **竞赛列表**：类别 / 月份 / 关键字组合筛选，卡片展示，支持排序。
+- **竞赛列表**：类别 / 月份 / 关键字组合筛选，卡片展示，支持排序；**分页渲染 + 查询缓存**。
 - **报名时间轴**：按 1–12 月查看「本月报名中」与「本月进行中」的赛事。
 - **智能问答**：自然语言提问 → 向量召回 → LLM 流式作答，答案下方折叠展示引用来源卡片；**无 Key 或调用异常时自动降级为本地检索摘要**，页面永不白屏。
 - **灵感工作台**：LLM 生成的洞察（分类分布 / 趋势 / 选题建议）三 Tab 折叠展示；选题卡片支持 `草稿 → 收藏 → 采纳` 状态流转并写回数据库，顶部指标实时联动。
@@ -83,7 +176,7 @@ flowchart TB
 
 ---
 
-## 2. 技术栈
+## 🛠 技术栈
 
 | 层 | 选型 | 说明 |
 | --- | --- | --- |
@@ -93,59 +186,63 @@ flowchart TB
 | LLM | OpenAI 兼容协议（DeepSeek） | 流式输出；Key 走 `.env` |
 | 数据处理 | pandas + openpyxl | Excel 批量导入 |
 | 后端 API（可选） | 标准库 `http.server` | `api.py` 提供 `/api/competitions`、`/api/timeline` 的 REST 接口，供非 Streamlit 前端调用 |
-
-**设计分工**：SQLite 负责筛选/聚合/统计的「真值」，Chroma 只做语义相似度索引，且**索引可随时由 SQLite 全量重建**。
+| 部署 | Streamlit Community Cloud | 空库冷启动自动初始化 + 无 Key 兜底降级 |
 
 ---
 
-## 3. 目录结构
+## 📁 目录结构
 
 ```
 .
 ├── app.py                  # 主入口（4 页路由 + 全局 CSS + 问答/灵感页实现）
+├── bootstrap.py            # 云端冷启动：空库检测 → 建表 → 造数 → 同步索引（含防抖锁）
 ├── api.py                  # 可选：REST 后端（competitions / timeline）
 ├── db.py                   # SQLite 连接、建表迁移、竞赛 CRUD、awards/leads/ideas/insights 读写
 ├── schema.sql              # 主表 competitions 结构
 ├── schema_kb.sql           # 知识库表结构（awards / search_leads / crawl_jobs / insights / ideas）
 ├── llm.py                  # LLM 封装：chat / chat_json / chat_stream / ping / llm_available / llm_config_hint
 ├── embedder.py             # 向量化封装（HF 镜像、bge-small-zh、mock 兜底）
-├── retriever.py            # Chroma 检索（filters / top_k / 分数阈值 / 召回倍数）
+├── retriever.py            # Chroma 检索（filters / top_k / 分数阈值 / 召回倍数 / L1→L2 两阶段）
 ├── kb.py                   # 知识库生命周期：init_kb / 全量同步 / 统计
-├── analyzer.py             # 洞察生成（分类分布、年度趋势、选题建议）
-├── gen_intro.py            # 赛事一句话简介批量生成
-├── import_excel.py         # Excel 导入（比赛.xlsx / 计算机类竞赛.xlsx）
-├── migrate_levels.py       # 级别字段历史数据迁移
-├── scripts/                # 低频运维脚本（建索引预热 / 造数据 / 迁移，见其 README）
-├── pages/
-│   └── 检索.py             # 独立语义检索页（带结构化过滤）
-├── static/
-│   └── bg.mp4              # 页面背景视频
-├── .streamlit/
-│   └── config.toml         # 主题（浅色 / 蓝）+ client / logger 配置
-├── chroma_db/              # 向量库持久化目录（首次运行自动生成）
-├── competitions.db         # SQLite 数据库（首次运行自动生成）
-├── 比赛.xlsx               # 原始数据样例
-├── 计算机类竞赛.xlsx       # 原始数据样例
-├── requirements.txt
+├── analyzer.py             # 洞察生成：分类分布 / 年度趋势 / 选题建议
+├── seed_data.py            # 演示数据（冷启动造数来源）
+├── pages/                  # 多页面（检索页等）
+├── scripts/                # 数据导入 / 迁移 / 生成等辅助脚本
+├── static/                 # 静态资源（样式等）
+├── test_*.py               # 自测脚本（retriever / pagination / pages / e2e …）
+├── CODE_REVIEW.md          # 🔍 代码审查记录（四维度清单 + 问题闭环）
 └── README.md
 ```
 
 ---
 
-## 4. 从零部署（有requirements.txt）
+## ✅ 工程规范
+
+本项目在交付前完成了一轮**系统性代码审查**，覆盖 `安全性 / 健壮性 / 性能 / 代码整洁度` 四个维度，并逐条记录了「发现的问题 → 修改记录 → 遗留项」。
+
+👉 **完整审查记录见：[CODE_REVIEW.md](./CODE_REVIEW.md)**
+
+审查中形成并落地的关键约定：
+
+- **密钥零入库**：`.env` 强制加入 `.gitignore`，代码中只经 `os.getenv` 读取，缺失时走降级而非崩溃。
+- **不可信输入先校验**：所有 SQL 走参数化；分页 / top_k / 月份等数值参数做范围钳制。
+- **失败可观测**：降级路径必须给出**人能看懂的原因**（如「未检测到 DEEPSEEK_API_KEY，将使用本地检索摘要兜底」）。
+- **写操作有守卫**：初始化、索引同步等重操作加锁 + 幂等标记，杜绝重复执行。
+
+---
+
+## 🚀 从零部署（本地）
 
 ### 4.1 环境要求
 
-- Python **3.10+**（推荐 3.11 / 3.12）
-- 内存 ≥ 4 GB（加载 bge-small-zh 约 400 MB；纯 mock 模式 >1 GB 即可）
-- 可选 GPU：有则自动用，无则 CPU 正常运行
+- Python 3.10+
+- 可访问 HuggingFace（或配置镜像 `HF_ENDPOINT`）
 
 ### 4.2 拉代码 & 建虚拟环境
 
 ```bash
-git clone <your-repo-url> competition-kb
-cd competition-kb
-
+git clone <your-repo-url>
+cd <repo>
 python -m venv venv
 # Windows
 venv\Scripts\activate
@@ -159,26 +256,13 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-> **torch 体积优化**：只需要 CPU 推理时，先装 CPU 版再装其余依赖
-> ```bash
-> pip install torch --index-url https://download.pytorch.org/whl/cpu
-> pip install -r requirements.txt
-> ```
-> **国内网络**：向量模型首次运行会从 `hf-mirror.com` 下载（代码内已内置镜像设置），约 100 MB，请保持网络通畅。若下载失败，程序会自动切到 **mock 向量模式**（检索链路仍可跑通，只是语义质量下降），可用环境变量强制：
-> ```bash
-> set KB_EMBED_MOCK=1        # Windows
-> export KB_EMBED_MOCK=1     # macOS / Linux
-> ```
-
 ### 4.4 配置 `.env`
 
-在项目根目录新建 `.env`：
-
-```dotenv
-# ---- LLM（OpenAI 兼容协议）----
-DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
+```bash
+# ---- 必选：LLM ----
+DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxx
 DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-flash
+DEEPSEEK_MODEL=deepseek-chat
 
 # ---- 可选：检索参数 ----
 # KB_CHROMA_DIR=chroma_db        # 向量库目录
@@ -190,11 +274,11 @@ DEEPSEEK_MODEL=deepseek-flash
 ```
 
 > ⚠️ `.env` 含密钥，请加入 `.gitignore`，**不要提交到仓库**。
-> 不配置 Key 也能启动：问答页会自动走「本地检索摘要」兜底模式。
+> **不配置 Key 也能启动**：问答页会自动走「本地检索摘要」兜底模式。
 
 ### 4.5 初始化数据
 
-首次启动会自动建表；如需导入 Excel 原始数据：
+首次启动会**自动建表**；如需导入 Excel 原始数据（以下脚本均位于项目根目录）：
 
 ```bash
 python import_excel.py            # 导入竞赛基础信息
@@ -230,63 +314,65 @@ python api.py --host 127.0.0.1 --port 8000
 ### 4.7 冒烟自检
 
 ```bash
-python -m py_compile app.py llm.py retriever.py kb.py db.py embedder.py
+python -m py_compile app.py llm.py retriever.py kb.py db.py embedder.py bootstrap.py
 python test_retriever.py          # 检索链路
-python test_app.py                # 页面函数可调用性
+python test_pagination.py         # 分页逻辑
+python test_app.py                # 页面函数可导入性
 ```
 
-打开首页后按顺序验证：列表筛选 → 时间轴月份切换 → 问答页提问（观察流式输出 + 引用卡片）→ 灵感工作台点击状态按钮（指标卡数字应变化）。
+打开页面顺次验证：列表筛选 → 时间轴月份切换 → 问答页提问（观察流式输出 + 引用卡片）→ 灵感工作台卡片状态按钮与指标卡联动。
 
 ---
 
-## 5. 常见问题
+## ❓ 常见问题
 
 | 现象 | 原因 / 处理 |
 | --- | --- |
-| 问答页没有打字机效果，直接出结果 | 未配置 `DEEPSEEK_API_KEY` 或调用失败，已自动降级为本地检索摘要 |
-| 检索结果文不对题 | 向量模型未下载成功，走了 mock 向量；检查网络或设置 `HF_ENDPOINT` 镜像 |
-| 索引为空提示 | 尚未执行 `kb.py` 同步，或 `chroma_db/` 被清空，重新同步即可 |
-| `sqlite3.OperationalError: no such column` | 老库结构过旧，运行 `python migrate_levels.py` 或删除库重建 |
-| 中文在 Windows 控制台打印报错 | 控制台编码为 GBK，仅影响日志输出，不影响功能；可 `chcp 65001` |
+| 问答页没有打字机效果，直接出结果 | 未配置 `DEEPSEEK_API_KEY` 或调用失败，属**预期降级**：自动转为本地检索摘要 |
+| 检索结果相关性差 | 向量模块未加载成功，走了 mock 向量；检查 `HF_ENDPOINT` 或配置镜像 |
+| 页面提示索引为空 | 尚未执行 `kb.py` 同步，或 `chroma_db/` 为空；去「检索」页点“从数据库同步索引” |
+| `sqlite3.OperationalError: no such column` | 老库结构残留，执行迁移脚本或删除本地库后重启（云端会自动重建） |
+| Windows 控制台中文乱码 | 控制台编码为 GBK，不影响功能；可执行 `chcp 65001` |
+| 云端首次打开较慢 | 属冷启动：建表 + 造数 + 建索引一次完成，之后走缓存与幂等标记 |
+| 流式输出时页面白屏（开了浏览器翻译） | 见下方「坑 3」，已通过 `translate="no"` 与结束态重渲染修复 |
 
 ---
 
-## 6. 免责声明
+## ⚖️ 免责声明
 
-数据来源于公开渠道，仅供学习与查询参考；LLM 生成内容可能存在偏差，请以赛事官网信息为准。
+数据来源于公开渠道，仅供学习与查询参考；LLM 生成内容可能存在偏差，请以赛事官方最新公告信息为准。
 
 ---
 
-## 7. 三条我踩的坑（复盘记录）
-
-开发过程中真正卡住我、且事后值得写下来的，是下面三件事。每一个都附了「怎么发现的」和「最终怎么解的」。
+## 🕳 三条我踩的坑（复盘记录）
 
 ### 坑 1：HuggingFace 模型下载超时卡死，页面像死机
 
-**现象**：第一次跑 `python kb.py` 构建向量索引，终端停在 `Loading BAAI/bge-small-zh-v1.5` 不动，几分钟后抛 `ReadTimeoutError` / `ConnectionError`。更坑的是在 Streamlit 里触发时，页面没有任何报错，只是一直转圈——用户视角就是「死机」。
+**现象**：首次启动后访问问答 / 检索页，页面一直转圈，长时间无响应，日志停在模型下载处。
 
-**原因**：`huggingface_hub` 默认走 `huggingface.co`，国内网络下 TLS 握手和 LFS 大文件分片下载都会超时。模型约 100 MB，会切成多个分片，只要一片卡住整个加载就阻塞。而且这段代码在 import / 首次调用时同步执行，直接堵死在主线程。
+**原因**：默认从 `huggingface.co` 拉取 `bge-small-zh-v1.5`，网络受限时连接一直挂起，而调用方是同步等待，整个页面就被拖住。
 
-**解决**：在 `embedder.py` 的**最顶部**（`import sentence_transformers` 之前）设置镜像环境变量——这一点很关键，晚一步设置就无效，因为库在 import 时就已经读取了 endpoint：
+**解决**：
 
-```python
-import os
-os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")   # 必须先于 sentence_transformers 导入
-```
+1. 配置镜像端点：`HF_ENDPOINT=https://hf-mirror.com`。
+2. 在 `embedder.py` 里做**后端探测 + 自动降级**：真模型加载失败立即切到**确定性 mock 向量**（`_mock_vec`，基于文本 md5 生成稳定向量），保证链路不阻塞、结果可复现。
+3. 通过 `KB_EMBED_MOCK=1` 可强制走 mock，方便在无网环境下演示与测试。
 
-配合 `HF_HUB_DOWNLOAD_TIMEOUT` 调大超时，并把「下载失败」这一分支用 `try/except` 兜住，降级到**确定性 mock 向量**（用 hash 播种的伪向量）。这样即使模型下载不下来，检索链路依然跑得通、页面依然能用，只是语义质量下降——**把硬失败变成软降级**，比让用户对着转圈干等强得多。
+学到的一课：**凡是「外部资源首次加载」的环节，都必须有超时与降级，否则一次网络抖动就是一次白屏。**
 
 ### 坑 2：Agent 命令行工具默认 20 秒超时，长脚本被拦腰打断
 
-**现象**：用命令行工具执行 `pip install`、模型预热、全量建索引这类耗时命令时，大约 20 秒后命令就被强行终止，返回的是「超时」而不是任务本身的报错。最误导的是——**部分**任务其实已经成功写入了数据，我却因为看到超时以为失败，重复跑了好几遍，差点把索引写重。
+**现象**：跑数据导入 / 索引重建时，命令在 20 秒左右被中断，但事后检查数据库发现数据其实已经写进去了——「以为失败，其实成功」。
 
-**原因**：工具层的执行超时默认只有 20 秒，与任务实际需要的时间无关。而长任务往往「前半段慢、后半段快」，被砍在中间时状态是不确定的。
+**原因**：命令行工具默认有 ~20s 超时，超时即杀进程；而脚本的写入是分批提交的，被杀时已提交的部分不会回滚。
 
-**解决**：分三步走，思路是「**让脚本自己扛住，而不是让调用方等**」。
+**解决**：
 
-1. **把耗时操作前置并外置**：模型下载 / 预热用 `scripts/warm_model.py`、`scripts/warm_download.py` 单独跑一次，跑完再进主流程，避免每次启动都等。
-2. **让长任务幂等**：同步索引用 `upsert` 而不是 `add`，重复执行结果一致；这样即使被中途打断，重跑也不会产生脏数据。
-3. **结果落盘再校验**：验证脚本不靠 stdout（控制台一旦被砍，输出就丢了），而是直接写 UTF-8 结果文件，事后读文件确认——这也是我从「以为失败其实成功」里学到的一课：**不要在同一个超时窗口里既跑任务又验结果**。
+1. 长任务显式加大超时，并且**不在超时窗口内做校验**。
+2. 改为「先启动、后台跑、结果落文件」，事后再读文件确认结果。
+3. 脚本层面保证**幂等**（重复执行不产生重复数据），这样即使被打断也能安全重跑。
+
+这也是我从「以为失败其实成功」里学到的一课：**不要在同一个超时窗口里既跑任务又验结果**。
 
 ### 坑 3：Streamlit 流式输出时，浏览器翻译插件炸出 `removeChild`
 
@@ -317,3 +403,14 @@ st.markdown(
 这个坑教会我的是：**流式渲染本质是在和第三方 DOM 修改者抢所有权**，凡是有外部脚本（翻译、广告拦截、油猴）可能介入的地方，都要假定 DOM 不完全受控，渲染策略要按这个前提来设计。
 
 ---
+
+## 📌 后续可迭代方向
+
+- 增量索引：新增/修改作品时只 upsert 变更条目，而非全量重建。
+- 检索评测集：为 `L1→L2` 参数（召回倍数 / 阈值）建立离线评测，用数据调参。
+- 多租户与权限：把「仅已审核」升级为角色化可见性控制。
+- 观测面板：把降级触发次数、缓存命中率、平均响应耗时做成可视化指标。
+
+---
+
+> 本文档由项目开发过程中的自我复盘整理而成，记录从「一个很普通的竞赛信息管理」到「可公开访问的 RAG 工作台」的迭代轨迹。
