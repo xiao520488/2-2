@@ -6,8 +6,11 @@ secondaryBackgroundColor = "#ffffff"
 textColor = "#123d66"
 
 [client]
-toolbarMode = "minimal"
-showErrorDetails = true
+# viewer = 完全隐藏右上角开发者工具栏 / 红皇冠，界面最纯净（纯展示模式）
+# 若后续需要部署菜单，可改回 minimal
+toolbarMode = "viewer"
+# 生产环境不向访客暴露异常堆栈
+showErrorDetails = false
 
 [logger]
 level = "info"

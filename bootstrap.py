@@ -103,11 +103,77 @@ def _sync_chroma(limit: int = 64) -> dict:
         return {"error": str(e)}
 
 
+def _seed_insights() -> int:
+    """补灌洞察数据（kind/scope/content_md/evidence/model/input_hash）。
+
+    走 kb.save_insight，靠 input_hash 部分唯一索引幂等：
+    已存在的条目返回 None，不会重复写入，也不会重复消耗 token。
+    """
+    import seed_data
+
+    n = 0
+    for item in getattr(seed_data, "INSIGHTS", []):
+        try:
+            evidence = item.get("evidence")
+            if isinstance(evidence, str):
+                evidence = kb.json_loads(evidence)
+            new_id = kb.save_insight(
+                kind=item["kind"],
+                scope=item["scope"],
+                content_md=item["content_md"],
+                model=item.get("model") or "",
+                evidence=evidence,
+                input_hash=item.get("input_hash"),
+            )
+            if new_id:
+                n += 1
+        except Exception as e:
+            st.warning(f"洞察种子写入失败：{item.get('scope')} — {e}")
+    return n
+
+
+def _seed_ideas() -> int:
+    """补灌灵感数据（title/pitch/detail_md/novelty/risk/ref_awards/status）。
+
+    走 kb.add_idea，按 content_hash = sha1(title) 幂等，重复条目返回 skipped。
+    ref_awards 在 seed 里已是 JSON 字符串，原样透传即可（add_idea 不会二次序列化 str）。
+    """
+    import seed_data
+
+    n = 0
+    for item in getattr(seed_data, "IDEAS", []):
+        try:
+            data = dict(item)
+            title = data.pop("title")
+            _new_id, action = kb.add_idea(title, **data)
+            if action == "inserted":
+                n += 1
+        except Exception as e:
+            st.warning(f"灵感种子写入失败：{item.get('title')} — {e}")
+    return n
+
+
+def _seed_kb_tables() -> dict:
+    """按表独立兜底：哪张知识库表空了就单独补灌哪张。
+
+    与 _is_empty() 的区别：_is_empty() 只判断 competitions/awards 是否都为空，
+    一旦线上库已有竞赛和作品、却被误删了 insights/ideas，就走不到灌数分支。
+    这里对两张表分别计数，缺失即补，幂等且不重复消耗 embedding。
+    """
+    result = {"insights": 0, "ideas": 0}
+    if _count("insights") == 0:
+        result["insights"] = _seed_insights()
+    if _count("ideas") == 0:
+        result["ideas"] = _seed_ideas()
+    return result
+
+
 def _run_bootstrap_once() -> dict:
     """真正的初始化逻辑，整个进程只成功执行一次。"""
     report = {
         "ok": True, "skipped": False, "error": None,
         "seeded_comp": 0, "seeded_awards": 0, "sync": {},
+        "seeded_insights": 0, "seeded_ideas": 0,
     }
 
     # --- 1. 建表（失败则直接放弃，后续都依赖表） ---
@@ -119,22 +185,29 @@ def _run_bootstrap_once() -> dict:
         report["error"] = f"建表失败：{e}"
         return report
 
-    # --- 2. 判断是否需要灌数据 ---
+    # --- 2/3. 主数据：空库才灌竞赛与作品 ---
     try:
-        if not _is_empty():
-            report["skipped"] = True
-            # 库非空但向量库可能为空（如上次同步失败），补同步一次
-            report["sync"] = _sync_chroma(limit=64)
-            return report
+        empty = _is_empty()
     except Exception as e:
         report["error"] = f"空库检测失败：{e}"
         return report
 
-    # --- 3. 灌种子数据 ---
-    report["seeded_comp"] = _seed_competitions()
-    report["seeded_awards"] = _seed_awards()
+    if empty:
+        report["seeded_comp"] = _seed_competitions()
+        report["seeded_awards"] = _seed_awards()
+    else:
+        # 库非空：主数据不重灌，但知识库表可能被清空过，交给第 4 步兜底
+        report["skipped"] = True
 
-    # --- 4. 同步向量库 ---
+    # --- 4. 知识库表兜底：insights / ideas 缺哪张补哪张（幂等） ---
+    try:
+        kb_seeded = _seed_kb_tables()
+        report["seeded_insights"] = kb_seeded.get("insights", 0)
+        report["seeded_ideas"] = kb_seeded.get("ideas", 0)
+    except Exception as e:
+        report["error"] = f"知识库种子补灌失败：{e}"
+
+    # --- 5. 同步向量库 ---
     report["sync"] = _sync_chroma(limit=64)
 
     return report
@@ -176,10 +249,17 @@ def ensure_ready(verbose: bool = True) -> dict:
         if report.get("error"):
             st.session_state[_SS_WARN] = report["error"]
         elif not report.get("skipped"):
-            st.toast(
-                f"演示数据初始化完成：竞赛 {report.get('seeded_comp')} 条 · "
-                f"作品 {report.get('seeded_awards')} 条（{report['cost']}s）"
-            )
+            parts = []
+            if report.get("seeded_comp"):
+                parts.append(f"竞赛 {report['seeded_comp']} 条")
+            if report.get("seeded_awards"):
+                parts.append(f"作品 {report['seeded_awards']} 条")
+            if report.get("seeded_insights"):
+                parts.append(f"洞察 {report['seeded_insights']} 条")
+            if report.get("seeded_ideas"):
+                parts.append(f"灵感 {report['seeded_ideas']} 条")
+            if parts:
+                st.toast(f"演示数据初始化完成：{' · '.join(parts)}（{report['cost']}s）")
     return report
 
 

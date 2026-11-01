@@ -62,6 +62,30 @@ def cached_categories():
     return db.get_categories()
 
 
+# ---------------------------------------------------------------- 数据缓存
+# 说明：
+#   - 列表页/时间轴页的查询结果按筛选参数缓存，翻页不再重复查库；
+#   - 参数均可哈希（None / str / int），符合 st.cache_data 要求；
+#   - 数据变更后调用 clear_data_cache() 主动失效（写库成功后调用）。
+@st.cache_data(show_spinner=False, max_entries=128)
+def cached_list_competitions(category=None, month=None, keyword=None):
+    """按筛选条件查询竞赛列表（带缓存）。"""
+    return db.list_competitions(category=category, month=month, keyword=keyword)
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def cached_month_timeline(month: int):
+    """某月时间轴数据（带缓存）。"""
+    return db.get_month_timeline(month)
+
+
+def clear_data_cache():
+    """清除所有数据缓存，供写库后调用。"""
+    cached_categories.clear()
+    cached_list_competitions.clear()
+    cached_month_timeline.clear()
+
+
 # ---------------------------------------------------------------- 样式
 def inject_styles():
     st.markdown(
@@ -977,7 +1001,7 @@ def page_list():
         st.session_state["card_filter_sig"] = _filter_sig
         st.session_state["card_page"] = 1
 
-    rows = db.list_competitions(category=cat_arg, month=month_arg, keyword=kw_arg)
+    rows = cached_list_competitions(cat_arg, month_arg, kw_arg)
 
     n_total = len(rows)
     n_nat = sum(1 for r in rows if level_theme(r.get("level"), r.get("level_label"))[0] == "national")
@@ -993,7 +1017,7 @@ def page_list():
 def page_timeline():
     st.header("报名时间轴")
     month = st.select_slider("选择月份", options=MONTHS, format_func=lambda m: f"{m}月")
-    tl = db.get_month_timeline(month)
+    tl = cached_month_timeline(month)
 
     reg = tl.get("registering") or []
     comp = tl.get("competing") or []
